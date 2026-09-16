@@ -29,8 +29,14 @@ Do NOT commit: `.env` (live OpenAI key), `.venv/`, `node_modules/`,
    and generous AI timeouts for shared CPUs).
    Alternative without Blueprint: New -> Web Service -> select repo ->
    Runtime **Docker**, Dockerfile Path `./Dockerfile`, Plan **Standard** (4 GB+).
-2. Environment (dashboard -> service -> Environment), optional:
-   `OPENAI_API_KEY` (only if you add credits; unused otherwise),
+2. Environment (dashboard -> service -> Environment):
+   `OPENAI_API_KEY` — paste a **funded** key to keep the OpenAI service live on
+   Render (chain is openai -> ollama -> heuristic; quota/offline just falls
+   back to Ollama, which still works with the key unset/empty).
+   `OPENAI_MODEL` (default `gpt-4o-mini`), `OPENAI_TIMEOUT` (default `30`),
+   and `AI_PROVIDER` (default `auto`; `ollama` forces local-only, `off`
+   disables AI) already have defaults from `render.yaml`/Dockerfile — override
+   them in the dashboard only if you need to. Also set `FRONTEND_URL` and
    `OLLAMA_MODEL` to swap models later.
 3. Deploy. First build takes **10–20 min** (torch + 1.3 GB of models).
 4. Copy the service URL, e.g. `https://escalation-rag-backend.onrender.com`.

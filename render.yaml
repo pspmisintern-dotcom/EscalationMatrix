@@ -28,5 +28,15 @@ services:
       # Set AFTER the first Vercel deploy, e.g. https://escalation-app.vercel.app
       - key: FRONTEND_URL
         sync: false
+      # --- Cloud AI (OpenAI, optional fast path: openai -> ollama -> heuristic) ---
+      # Set this to a funded key to get fast cloud answers on Render; blank/omitted
+      # means Ollama-only. Never commit a live key — set it in the dashboard.
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: OPENAI_TIMEOUT
+        value: "30"
+      # auto = openai -> ollama -> heuristic; use "ollama" to force local-only.
+      - key: AI_PROVIDER
+        value: auto

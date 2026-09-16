@@ -46,6 +46,19 @@ AI_FIRST_TOKEN_TIMEOUT = float(os.getenv("AI_FIRST_TOKEN_TIMEOUT", "15"))
 AI_TOTAL_TIMEOUT = float(os.getenv("AI_TOTAL_TIMEOUT", "30"))
 AI_CACHE_SIZE = int(os.getenv("AI_CACHE_SIZE", "32"))
 
+# --- Cloud AI (OpenAI) -------------------------------------------------------
+# Optional fast path alongside the local Ollama model. When OPENAI_API_KEY is
+# set (local `.env` or Render env var), novel causes try OpenAI FIRST (fast,
+# no local RAM cost) and fall back to Ollama, then to the heuristic.
+# AI_PROVIDER selects the chain: "auto" (default: openai -> ollama ->
+# heuristic), "openai" (cloud only), "ollama" (local only), "off" (no AI).
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+try:
+    OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "30"))
+except ValueError:
+    OPENAI_TIMEOUT = 30.0
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
+
 _AI_WARMUP_TOKENS = 8  # startup warmup length: enough decode steps to page in weights
 
 # Sentinel pushed by the Ollama worker thread when the stream is over.
@@ -74,6 +87,52 @@ def _shorten(value: Any, limit: int = AI_MAX_FIELD_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def _openai_available() -> bool:
+    """True when the cloud OpenAI path may be used for this request."""
+    if AI_PROVIDER in ("off", "ollama"):
+        return False
+    return bool(os.getenv("OPENAI_API_KEY", "").strip())
+
+
+def _ollama_available() -> bool:
+    """True when the local Ollama path may be used for this request."""
+    return AI_PROVIDER not in ("off", "openai")
+
+
+def _openai_answer(cause_query: str, context_cases: list[dict[str, Any]]) -> str:
+    """One bounded OpenAI call reusing the Ollama prompt shape.
+
+    Returns the stripped answer text, or "" when the key is missing, the
+    package is missing, AI_PROVIDER disallows it, or the call fails/times
+    out. Never raises — callers fall through to Ollama, then heuristic.
+    """
+    if AI_PROVIDER in ("off", "ollama"):
+        return ""
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    try:
+        from openai import OpenAI
+    except Exception:
+        return ""
+    system_prompt, user_prompt = _build_ai_prompts(cause_query, context_cases)
+    try:
+        client = OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT)
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        return (response.choices[0].message.content or "").strip()
+    except Exception as exc:  # quota/offline/slow -> Ollama is next
+        print(f"[rag] OpenAI failed, falling back to Ollama: {exc!r}", file=sys.stderr, flush=True)
+        return ""
 
 
 def _ai_cache_get(cache_key: str) -> str:
@@ -150,6 +209,84 @@ def _start_ollama_stream(
     return tokens, cancelled
 
 
+def _iter_openai_tokens(
+    cause_query: str,
+    context_cases: list[dict[str, Any]],
+    completed: list | None = None,
+) -> Iterator[str]:
+    """Yield OpenAI tokens as they stream in, within OPENAI_TIMEOUT.
+
+    Behaves like the Ollama token iterator: yields nothing when the key is
+    missing, AI_PROVIDER disallows the cloud path, the package is missing, or
+    nothing arrives inside the timeout. `completed` gains True only when the
+    model finished on its own. Never raises — callers fall through to Ollama.
+    """
+    if not _openai_available():
+        return
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return
+    try:
+        from openai import OpenAI
+    except Exception:
+        return
+    system_prompt, user_prompt = _build_ai_prompts(cause_query, context_cases)
+    pieces: queue.Queue = queue.Queue()
+    done = threading.Event()
+
+    def _worker() -> None:
+        stream = None
+        try:
+            client = OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT)
+            stream = client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=300,
+                stream=True,
+            )
+            for chunk in stream:
+                if done.is_set():
+                    break
+                try:
+                    delta = (chunk.choices[0].delta.content if chunk.choices else "") or ""
+                except Exception:
+                    delta = ""
+                if delta:
+                    pieces.put(delta)
+        except Exception as exc:  # quota/offline/slow -> Ollama is next
+            print(f"[rag] OpenAI stream failed, falling back to Ollama: {exc!r}", file=sys.stderr, flush=True)
+        finally:
+            try:
+                if stream is not None and hasattr(stream, "close"):
+                    stream.close()
+            except Exception:
+                pass
+            pieces.put(_STREAM_END)
+
+    threading.Thread(target=_worker, daemon=True, name="openai-stream").start()
+    deadline = time.monotonic() + OPENAI_TIMEOUT
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                piece = pieces.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if piece is _STREAM_END:
+                if completed is not None:
+                    completed.append(True)
+                return
+            yield piece
+    finally:
+        done.set()  # stop consuming the worker stream
+
+
 def _iter_ai_tokens(
     cause_query: str,
     context_cases: list[dict[str, Any]],
@@ -157,13 +294,28 @@ def _iter_ai_tokens(
 ) -> Iterator[str]:
     """Yield AI tokens, stopping as soon as a deadline is exceeded.
 
-    Nothing is yielded when the model does not answer within
-    `AI_FIRST_TOKEN_TIMEOUT` (cold model / Ollama down) or when it goes quiet
-    before `AI_TOTAL_TIMEOUT`: callers then keep the instant data-driven
+    Chain: OpenAI (cloud, fast) -> Ollama (local) -> nothing. Each stage is
+    bounded by its own timeout; skipped stages simply yield nothing.
+
+    Nothing is yielded when no model answers in time (cold model / Ollama
+    down / OpenAI quota): callers then keep the instant data-driven
     recommendation instead of making the user wait on the model.
     `completed` (a one-item list, used as an out-parameter) is set to True only
-    when the model finished the answer on its own.
+    when a model finished the answer on its own.
     """
+    if _openai_available():
+        openai_done: list = []
+        yielded_any = False
+        for piece in _iter_openai_tokens(cause_query, context_cases, openai_done):
+            yielded_any = True
+            yield piece
+        if yielded_any:
+            if completed is not None and openai_done:
+                completed.append(True)
+            return
+        # OpenAI produced nothing (quota/offline/timeout) -> try local Ollama.
+    if not _ollama_available():
+        return
     system_prompt, user_prompt = _build_ai_prompts(cause_query, context_cases)
     tokens, cancelled = _start_ollama_stream(system_prompt, user_prompt)
     started = False
