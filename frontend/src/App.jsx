@@ -3,7 +3,7 @@ import './App.css';
 
 /* Backend base URL: local dev defaults to localhost; production (Vercel) sets
    VITE_API_BASE to the Render backend URL, e.g. https://escalation-rag-backend.onrender.com */
-const API_BASE = import.meta.env.VITE_API_URL;
+const API_BASE = import.meta.env.VITE_API_BASE;
 
 const EXAMPLE_QUERIES = [
   'Coating area thickness not as per drawing size',
