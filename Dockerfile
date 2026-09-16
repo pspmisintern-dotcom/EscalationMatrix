@@ -21,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # curl (Ollama install) + libgomp1 (faiss-cpu OpenMP on slim images).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates libgomp1 procps \
+    curl ca-certificates libgomp1 procps zstd \
  && rm -rf /var/lib/apt/lists/*
 
 # Ollama binary.
