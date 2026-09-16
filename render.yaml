@@ -1,0 +1,32 @@
+# Render Blueprint: backend + Ollama (Docker). Repo root == `project/` folder.
+# In Render: New -> Blueprint -> pick the repo. First deploy takes 10-20 min
+# (torch + model layers). Health check hits /health.
+services:
+  - type: web
+    name: escalation-rag-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Free tier (512 MB RAM) will likely OOM with embeddings + qwen2.5:1.5b.
+    # Standard (4 GB) is the minimum for reliable AI. Free works for the API +
+    # instant historical answers, with the AI block usually skipped/timed-out.
+    plan: standard
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: OLLAMA_MODEL
+        value: qwen2.5:1.5b
+      # Shared-CPU hosts are slower than local dev: give the model more room
+      # before the app falls back to the instant historical answer.
+      - key: AI_FIRST_TOKEN_TIMEOUT
+        value: "60"
+      - key: AI_TOTAL_TIMEOUT
+        value: "120"
+      - key: AI_NUM_THREAD
+        value: "0"
+      # Vercel frontend origin (CORS allow-list in backend/app.py).
+      # Set AFTER the first Vercel deploy, e.g. https://escalation-app.vercel.app
+      - key: FRONTEND_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
