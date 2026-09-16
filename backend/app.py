@@ -15,7 +15,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from backend.routes import router, service # noqa: E402
-from backend.services.rag_service import warm_ollama_async  # noqa: E402
+from .services.rag_service import warm_ollama_async  # noqa: E402
 
 
 def _cors_origins() -> list[str]:
