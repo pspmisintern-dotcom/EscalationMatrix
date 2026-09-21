@@ -27,7 +27,7 @@ def _cors_origins() -> list[str]:
     """
     raw = os.getenv("FRONTEND_URL", "")
     origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-    origins += ["http://127.0.0.1:3000", "http://localhost:3000"]
+    origins += ["http://127.0.0.1:3000", "http://localhost:3000","https://escalation-matrix-v52l.vercel.app"]
     # Preserve order, drop duplicates.
     return list(dict.fromkeys(origins))
 
