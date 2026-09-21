@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
 
 /* Backend base URL: local dev defaults to localhost; production (Vercel) sets
    VITE_API_BASE to the Render backend URL, e.g. https://escalation-rag-backend.onrender.com */
-const API_BASE = import.meta.env.VITE_API_BASE;
+const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
 const EXAMPLE_QUERIES = [
   'Coating area thickness not as per drawing size',
@@ -217,7 +217,6 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [toast, setToast] = useState(null);
-  const similarRef = useRef(null);
 
   /* Live backend status indicator. */
   useEffect(() => {
@@ -427,14 +426,6 @@ export default function App() {
   const similarCases = Array.isArray(result?.similar_cases) ? result.similar_cases : [];
   const hasResult = result !== null && !error;
 
-  function scrollSimilar(direction) {
-    const el = similarRef.current;
-    if (!el) return;
-    const card = el.querySelector('.similar-card');
-    const step = card ? card.offsetWidth + 14 : 320;
-    el.scrollBy({ left: direction * step, behavior: 'smooth' });
-  }
-
   return (
     <div className="app">
       <nav className="topbar">
@@ -632,46 +623,39 @@ export default function App() {
                 </div>
 
                 {similarOpen && (
-                  <div className="similar-carousel">
-                    <button className="similar-arrow similar-arrow-left" onClick={() => scrollSimilar(-1)} aria-label="Previous similar cases">
-                      <span>‹</span>
-                    </button>
-                    <div className="similar-grid" ref={similarRef}>
-                      {similarCases.map((item, index) => (
-                        <div className="similar-card" key={index}>
-                          <div className="similar-card-top">
-                            <span className="similar-card-title">{cleanCause(item.cause)}</span>
-                            <span className={`similarity-badge ${getSimilarityBadge(item.similarity)}`}>
-                              {formatSimilarity(item.similarity)}
-                            </span>
+                  <div className="similar-list">
+                    {similarCases.map((item, index) => (
+                      <div className="similar-card" key={index}>
+                        <div className="similar-card-top">
+                          <span className="similar-card-index">{String(index + 1).padStart(2, '0')}</span>
+                          <span className="similar-card-title">{cleanCause(item.cause)}</span>
+                          <span className={`similarity-badge ${getSimilarityBadge(item.similarity)}`}>
+                            {formatSimilarity(item.similarity)}
+                          </span>
+                        </div>
+                        <div className="similar-card-body">
+                          <div className="similar-card-detail">
+                            <span className="similar-card-label">Solution</span>
+                            <span className="similar-card-value">{cleanCause(item.solution)}</span>
                           </div>
-                          <div className="similar-card-body">
-                            <div className="similar-card-detail">
-                              <span className="similar-card-label">Solution</span>
-                              <span className="similar-card-value">{cleanCause(item.solution)}</span>
-                            </div>
-                            <div className="similar-card-detail">
-                              <span className="similar-card-label">Effort</span>
-                              <span className="similar-card-value">{cleanCause(item.effort_taken)}</span>
-                            </div>
-                          </div>
-                          <div className="similar-card-tags">
-                            {item.escalation_id && <span className="tag tag-id">{item.escalation_id}</span>}
-                            {item.department && <span className="tag tag-dept">{item.department}</span>}
-                            {item.customer_name && item.customer_name !== 'Not Found' && (
-                              <span className="tag">{item.customer_name}</span>
-                            )}
-                            {item.material_name && item.material_name !== 'Not Found' && (
-                              <span className="tag">{item.material_name}</span>
-                            )}
-                            {item.level && <span className="tag tag-level">{item.level}</span>}
+                          <div className="similar-card-detail">
+                            <span className="similar-card-label">Effort</span>
+                            <span className="similar-card-value">{cleanCause(item.effort_taken)}</span>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                    <button className="similar-arrow similar-arrow-right" onClick={() => scrollSimilar(1)} aria-label="Next similar cases">
-                      <span>›</span>
-                    </button>
+                        <div className="similar-card-tags">
+                          {item.escalation_id && <span className="tag tag-id">{item.escalation_id}</span>}
+                          {item.department && <span className="tag tag-dept">{item.department}</span>}
+                          {item.customer_name && item.customer_name !== 'Not Found' && (
+                            <span className="tag">{item.customer_name}</span>
+                          )}
+                          {item.material_name && item.material_name !== 'Not Found' && (
+                            <span className="tag">{item.material_name}</span>
+                          )}
+                          {item.level && <span className="tag tag-level">{item.level}</span>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
