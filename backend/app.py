@@ -1,51 +1,112 @@
 import os
 from contextlib import asynccontextmanager
 
-# The project root `.env` must be loaded BEFORE the service modules are
-# imported: `services.rag_service` reads its AI tuning knobs (model, token cap,
-# deadlines, cache size) from the environment at import time.
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------
+# Environment
+# ---------------------------------------------------------
+
 _backend_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(_backend_dir, ".."))
+_project_root = os.path.abspath(os.path.join(_backend_dir, ".."))
 
-from dotenv import load_dotenv  # noqa: E402  (must run before importing services)
+# Load local .env when running locally.
+# On Render, environment variables configured in the dashboard
+# are still available through os.environ.
+load_dotenv(os.path.join(_project_root, ".env"))
 
-load_dotenv(os.path.join(project_root, ".env"))
+
+# ---------------------------------------------------------
+# FastAPI imports
+# ---------------------------------------------------------
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from routes import router, service # noqa: E402
-from services.rag_service import RAGService
-from services.rag_service import warm_ollama_async  # noqa: E402
+from routes import router, service  # noqa: E402
 
+
+# ---------------------------------------------------------
+# CORS
+# ---------------------------------------------------------
 
 def _cors_origins() -> list[str]:
-    """Origins allowed to call the API (Vercel frontend + local dev).
-
-    Set FRONTEND_URL on Render to the Vercel URL, e.g.
-    https://escalation-app.vercel.app. Comma-separated values are supported.
     """
+    Origins allowed to call this API.
+
+    FRONTEND_URL can contain one or more comma-separated URLs.
+
+    Example on Render:
+
+        FRONTEND_URL=https://escalation-matrix-v52l.vercel.app
+    """
+
     raw = os.getenv("FRONTEND_URL", "")
-    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-    origins += ["http://127.0.0.1:3000", "http://localhost:3000","https://escalation-matrix-v52l.vercel.app"]
-    # Preserve order, drop duplicates.
+
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in raw.split(",")
+        if origin.strip()
+    ]
+
+    # Production frontend
+    origins.append(
+        "https://escalation-matrix-v52l.vercel.app"
+    )
+
+    # Local development
+    origins.extend(
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
+
+    # Remove duplicates while preserving order
     return list(dict.fromkeys(origins))
 
 
+# ---------------------------------------------------------
+# Application lifespan
+# ---------------------------------------------------------
+
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    # Load the embedding model + FAISS index now instead of on the user's first
-    # search (that load costs ~30 s on a cold CPU-only host; the warmup holds
-    # the load lock, so a concurrent search waits for it rather than building a
-    # second copy of the model).
-    service.warmup()
-    # Loads the local model AND runs a realistic prompt through it, so the
-    # first search does not pay the (multi-second) weight page-in.
-    warm_ollama_async()
+async def lifespan(app: FastAPI):
+    """
+    Keep application startup fast.
+
+    IMPORTANT:
+    Do NOT perform the expensive RAG/Ollama warmup here.
+
+    Render needs FastAPI to become healthy quickly. Running
+    service.warmup() during startup can cause the service to
+    remain unavailable or fail its health checks.
+    """
+
+    print("Starting Escalation Management API...")
+    print("CORS origins:", _cors_origins())
+
     yield
 
+    print("Shutting down Escalation Management API...")
 
-app = FastAPI(title="Escalation Management RAG", version="1.0.0", lifespan=lifespan)
+
+# ---------------------------------------------------------
+# FastAPI application
+# ---------------------------------------------------------
+
+app = FastAPI(
+    title="Escalation Management RAG",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+# ---------------------------------------------------------
+# CORS middleware
+# ---------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -55,8 +116,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ---------------------------------------------------------
+# Routes
+# ---------------------------------------------------------
+
 app.include_router(router)
+
+
+# ---------------------------------------------------------
+# Health check
+# ---------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """
+    Lightweight health check.
+
+    This must remain fast and must not load the RAG model,
+    FAISS index, Ollama, or external services.
+    """
+
     return {"status": "ok"}
